@@ -107,11 +107,77 @@ export default async function handler(req, res) {
       content = content.substring(0, 500) + "...";
     }
 
+    // 작성자 추출
+    const author =
+      $('meta[property="og:article:author"]').attr("content") ||
+      $('meta[name="author"]').attr("content") ||
+      $('meta[property="article:author"]').attr("content") ||
+      null;
+
+    // 게시일 추출
+    const publishedDate =
+      $('meta[property="article:published_time"]').attr("content") ||
+      $('meta[property="og:article:published_time"]').attr("content") ||
+      $('meta[name="publish_date"]').attr("content") ||
+      $('meta[name="date"]').attr("content") ||
+      $("time[datetime]").attr("datetime") ||
+      null;
+
+    // 사이트명 추출
+    let siteName =
+      $('meta[property="og:site_name"]').attr("content") ||
+      $('meta[name="application-name"]').attr("content") ||
+      null;
+
+    // 사이트명이 없으면 도메인에서 추출
+    if (!siteName) {
+      const urlObj = new URL(url);
+      siteName = urlObj.hostname.replace("www.", "");
+    }
+
+    // 파비콘 추출
+    let favicon =
+      $('link[rel="icon"]').attr("href") ||
+      $('link[rel="shortcut icon"]').attr("href") ||
+      $('link[rel="apple-touch-icon"]').attr("href") ||
+      null;
+
+    // 파비콘 상대 경로를 절대 경로로 변환
+    if (favicon && !favicon.startsWith("http")) {
+      const urlObj = new URL(url);
+      if (favicon.startsWith("//")) {
+        favicon = urlObj.protocol + favicon;
+      } else if (favicon.startsWith("/")) {
+        favicon = urlObj.origin + favicon;
+      } else {
+        favicon = urlObj.origin + "/" + favicon;
+      }
+    }
+
+    // 키워드 추출
+    const keywords =
+      $('meta[name="keywords"]').attr("content") ||
+      $('meta[property="article:tag"]').attr("content") ||
+      null;
+
+    // 설명(description) 추출
+    const description =
+      $('meta[property="og:description"]').attr("content") ||
+      $('meta[name="description"]').attr("content") ||
+      $('meta[name="twitter:description"]').attr("content") ||
+      null;
+
     return res.status(200).json({
       title,
       image,
       content,
       url,
+      author,
+      publishedDate,
+      siteName,
+      favicon,
+      keywords,
+      description,
     });
   } catch (error) {
     console.error("Scraping error:", error);
