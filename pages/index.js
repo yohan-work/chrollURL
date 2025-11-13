@@ -48,10 +48,21 @@ function useHistory() {
 }
 
 export default function Home() {
+  // 모드 관리
+  const [mode, setMode] = useState('single'); // 'single' or 'batch'
+  
+  // 단일 URL 모드
   const [url, setUrl] = useState('');
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
+  
+  // 일괄 처리 모드
+  const [bulkUrls, setBulkUrls] = useState('');
+  const [batchResults, setBatchResults] = useState([]);
+  const [batchProgress, setBatchProgress] = useState({ current: 0, total: 0 });
+  const [isBatchProcessing, setIsBatchProcessing] = useState(false);
+  
   const [toast, setToast] = useState(null);
   const { history, addToHistory, removeFromHistory, clearHistory } = useHistory();
 
@@ -149,6 +160,125 @@ export default function Home() {
     }
   };
 
+  // 일괄 처리 함수
+  const handleBatchSubmit = async (e) => {
+    e.preventDefault();
+    
+    if (!bulkUrls.trim()) {
+      showToast('URL을 입력해주세요');
+      return;
+    }
+
+    // URL 파싱 및 유효성 검사
+    const urls = bulkUrls
+      .split('\n')
+      .map(u => u.trim())
+      .filter(u => u && (u.startsWith('http://') || u.startsWith('https://')));
+
+    if (urls.length === 0) {
+      showToast('유효한 URL이 없습니다');
+      return;
+    }
+
+    setIsBatchProcessing(true);
+    setBatchResults([]);
+    setBatchProgress({ current: 0, total: urls.length });
+
+    const results = [];
+
+    // 순차적으로 처리
+    for (let i = 0; i < urls.length; i++) {
+      const url = urls[i];
+      setBatchProgress({ current: i + 1, total: urls.length });
+
+      try {
+        const response = await fetch('/api/scrape', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ url }),
+        });
+
+        const data = await response.json();
+
+        if (!response.ok) {
+          throw new Error(data.error || '오류가 발생했습니다');
+        }
+
+        results.push({
+          id: i + 1,
+          status: 'success',
+          ...data,
+        });
+      } catch (err) {
+        results.push({
+          id: i + 1,
+          status: 'error',
+          url,
+          error: err.message,
+          title: '추출 실패',
+          siteName: null,
+        });
+      }
+
+      // 결과를 실시간으로 업데이트
+      setBatchResults([...results]);
+    }
+
+    setIsBatchProcessing(false);
+    showToast(`${results.length}개 URL 처리 완료`);
+  };
+
+  // CSV 내보내기 함수
+  const exportToCSV = () => {
+    if (batchResults.length === 0) {
+      showToast('내보낼 데이터가 없습니다');
+      return;
+    }
+
+    // CSV 헤더
+    const headers = ['순번', 'URL', '제목', '사이트명', '작성자', '게시일', '설명', '이미지 URL', '키워드', '상태'];
+    
+    // CSV 행 데이터
+    const rows = batchResults.map(item => [
+      item.id,
+      item.url || '',
+      (item.title || '').replace(/"/g, '""'), // 따옴표 이스케이프
+      (item.siteName || '').replace(/"/g, '""'),
+      (item.author || '').replace(/"/g, '""'),
+      item.publishedDate ? new Date(item.publishedDate).toLocaleDateString('ko-KR') : '',
+      (item.description || '').replace(/"/g, '""'),
+      item.image || '',
+      (item.keywords || '').replace(/"/g, '""'),
+      item.status === 'success' ? '성공' : `실패: ${item.error || ''}`,
+    ]);
+
+    // CSV 문자열 생성
+    const csvContent = [
+      headers.map(h => `"${h}"`).join(','),
+      ...rows.map(row => row.map(cell => `"${cell}"`).join(',')),
+    ].join('\n');
+
+    // BOM 추가 (한글 인코딩을 위해)
+    const BOM = '\uFEFF';
+    const blob = new Blob([BOM + csvContent], { type: 'text/csv;charset=utf-8;' });
+    
+    // 다운로드
+    const link = document.createElement('a');
+    const url = URL.createObjectURL(blob);
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
+    
+    link.setAttribute('href', url);
+    link.setAttribute('download', `url-extract-${timestamp}.csv`);
+    link.style.visibility = 'hidden';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    
+    showToast('CSV 파일이 다운로드되었습니다');
+  };
+
   return (
     <>
       <Head>
@@ -159,9 +289,9 @@ export default function Home() {
       </Head>
 
       <main className="min-h-screen py-12 px-4">
-        <div className="max-w-3xl mx-auto">
+        <div className="max-w-5xl mx-auto">
           {/* 헤더 */}
-          <div className="mb-12 text-center">
+          <div className="mb-8 text-center">
             <h1 className="text-4xl font-bold text-gray-900 mb-3">
               URL 정보 추출기
             </h1>
@@ -170,6 +300,35 @@ export default function Home() {
             </p>
           </div>
 
+          {/* 모드 전환 탭 */}
+          <div className="flex justify-center mb-8">
+            <div className="inline-flex bg-gray-100 rounded-xl p-1">
+              <button
+                onClick={() => setMode('single')}
+                className={`px-6 py-2 rounded-lg font-medium transition-all ${
+                  mode === 'single'
+                    ? 'bg-white text-gray-900 shadow-sm'
+                    : 'text-gray-600 hover:text-gray-900'
+                }`}
+              >
+                단일 URL
+              </button>
+              <button
+                onClick={() => setMode('batch')}
+                className={`px-6 py-2 rounded-lg font-medium transition-all ${
+                  mode === 'batch'
+                    ? 'bg-white text-gray-900 shadow-sm'
+                    : 'text-gray-600 hover:text-gray-900'
+                }`}
+              >
+                일괄 처리
+              </button>
+            </div>
+          </div>
+
+          {/* 단일 URL 모드 */}
+          {mode === 'single' && (
+            <>
           {/* 입력 폼 */}
           <form onSubmit={handleSubmit} className="mb-8">
             <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-200">
@@ -388,7 +547,7 @@ export default function Home() {
             </div>
           )}
 
-          {/* 히스토리 섹션 */}
+          {/* 히스토리 섹션 (단일 모드에서만 표시) */}
           {history.length > 0 && (
             <div className="mt-12">
               <div className="flex items-center justify-between mb-6">
@@ -474,6 +633,156 @@ export default function Home() {
                 ))}
               </div>
             </div>
+          )}
+            </>
+          )}
+
+          {/* 일괄 처리 모드 */}
+          {mode === 'batch' && (
+            <>
+              {/* 입력 폼 */}
+              <form onSubmit={handleBatchSubmit} className="mb-8">
+                <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-200">
+                  <label htmlFor="bulkUrls" className="block text-sm font-semibold text-gray-900 mb-3">
+                    URL 목록 (한 줄에 하나씩)
+                  </label>
+                  <textarea
+                    id="bulkUrls"
+                    value={bulkUrls}
+                    onChange={(e) => setBulkUrls(e.target.value)}
+                    placeholder="https://example.com/page1&#10;https://example.com/page2&#10;https://example.com/page3"
+                    rows={8}
+                    className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent transition-all resize-none font-mono text-sm"
+                    disabled={isBatchProcessing}
+                  />
+                  
+                  {/* URL 개수 표시 */}
+                  <div className="mt-3 flex items-center justify-between">
+                    <span className="text-sm text-gray-600">
+                      {bulkUrls.split('\n').filter(u => u.trim() && (u.trim().startsWith('http://') || u.trim().startsWith('https://'))).length}개의 유효한 URL
+                    </span>
+                    <button
+                      type="submit"
+                      disabled={isBatchProcessing}
+                      className="px-6 py-2 bg-primary text-white font-semibold rounded-xl hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+                    >
+                      {isBatchProcessing ? '처리 중...' : '일괄 추출'}
+                    </button>
+                  </div>
+                </div>
+              </form>
+
+              {/* 진행 상태 */}
+              {isBatchProcessing && (
+                <div className="mb-8 bg-white rounded-2xl p-6 shadow-sm border border-gray-200">
+                  <div className="flex items-center justify-between mb-3">
+                    <span className="text-sm font-semibold text-gray-900">
+                      처리 중... ({batchProgress.current}/{batchProgress.total})
+                    </span>
+                    <span className="text-sm text-gray-600">
+                      {Math.round((batchProgress.current / batchProgress.total) * 100)}%
+                    </span>
+                  </div>
+                  <div className="w-full bg-gray-200 rounded-full h-2">
+                    <div 
+                      className="bg-primary h-2 rounded-full transition-all duration-300"
+                      style={{ width: `${(batchProgress.current / batchProgress.total) * 100}%` }}
+                    ></div>
+                  </div>
+                </div>
+              )}
+
+              {/* 결과 테이블 */}
+              {batchResults.length > 0 && (
+                <div className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden mb-8">
+                  <div className="p-6 border-b border-gray-200 flex items-center justify-between">
+                    <h2 className="text-xl font-bold text-gray-900">
+                      추출 결과 ({batchResults.length}개)
+                    </h2>
+                    <button
+                      onClick={exportToCSV}
+                      className="flex items-center gap-2 px-4 py-2 bg-primary text-white font-semibold rounded-lg hover:bg-blue-700 transition-all"
+                    >
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                      </svg>
+                      CSV 다운로드
+                    </button>
+                  </div>
+                  
+                  <div className="overflow-x-auto">
+                    <table className="w-full">
+                      <thead className="bg-gray-50">
+                        <tr>
+                          <th className="px-6 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">순번</th>
+                          <th className="px-6 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">상태</th>
+                          <th className="px-6 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">URL</th>
+                          <th className="px-6 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">제목</th>
+                          <th className="px-6 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">사이트명</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-200">
+                        {batchResults.map((item) => (
+                          <tr key={item.id} className="hover:bg-gray-50 transition-colors">
+                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                              {item.id}
+                            </td>
+                            <td className="px-6 py-4 whitespace-nowrap">
+                              {item.status === 'success' ? (
+                                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                                  <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
+                                    <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                                  </svg>
+                                  성공
+                                </span>
+                              ) : (
+                                <span 
+                                  className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800 cursor-help"
+                                  title={item.error}
+                                >
+                                  <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
+                                    <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
+                                  </svg>
+                                  실패
+                                </span>
+                              )}
+                            </td>
+                            <td className="px-6 py-4 text-sm text-gray-600 max-w-xs truncate">
+                              <a 
+                                href={item.url} 
+                                target="_blank" 
+                                rel="noopener noreferrer"
+                                className="hover:text-primary hover:underline"
+                              >
+                                {item.url}
+                              </a>
+                            </td>
+                            <td className="px-6 py-4 text-sm text-gray-900 max-w-md truncate">
+                              {item.title}
+                            </td>
+                            <td className="px-6 py-4 text-sm text-gray-600 whitespace-nowrap">
+                              {item.siteName || '-'}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              {/* 안내 메시지 */}
+              {!isBatchProcessing && batchResults.length === 0 && (
+                <div className="text-center py-16">
+                  <svg className="w-16 h-16 text-gray-300 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                  </svg>
+                  <p className="text-gray-500">
+                    여러 URL을 입력하고 일괄 추출 버튼을 눌러주세요
+                  </p>
+                </div>
+              )}
+            </>
           )}
         </div>
       </main>
